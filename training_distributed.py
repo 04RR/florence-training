@@ -1,3 +1,5 @@
+# torchrun --nproc_per_node=2 train_distributed.py --data-path "/fast_data_2d_2/rohit_work/florence_data/florence_training_data.json" --batch-size 12 --epochs 3 --lr 1e-6 --eval-steps 100000 --run-name "florence_run_one" --max-val-item-count 10000
+
 import argparse
 import os
 from functools import partial
@@ -19,6 +21,9 @@ import wandb
 from torch.cuda.amp import autocast, GradScaler
 from peft import LoraConfig, get_peft_model
 from PIL import Image
+import warnings
+
+warnings.filterwarnings("ignore")
 
 
 def setup(rank, world_size):
@@ -99,7 +104,6 @@ def evaluate_model(rank, world_size, model, val_loader, device, train_loss, proc
         wandb.log({"step": global_step, "train_loss": avg_train_loss})
         print(f"Rank {rank} - Average Training Loss: {avg_train_loss}")
 
-    # Evaluation phase
     model.eval()
     val_loss = 0
     with torch.no_grad():
@@ -133,7 +137,6 @@ def evaluate_model(rank, world_size, model, val_loader, device, train_loss, proc
     avg_val_loss = val_loss / val_item_count
     print(f"Rank {rank} - Step {global_step} - Average Validation Loss: {avg_val_loss}")
 
-    # Log metrics to wandb
     if rank == 0:
         wandb.log({"val_loss": avg_val_loss, "step": global_step})
 
@@ -146,8 +149,7 @@ def train_model(rank, world_size, data_path, batch_size=6, use_lora=False, epoch
     if run_name is None:
         run_name = fw.generate(2, separator="_")
 
-    # Initialize wandb
-    if rank == 0:  # Only initialize wandb in the main process
+    if rank == 0:
         wandb.init(project="DocVQA-instruct", name=run_name)
         wandb.config.update({
             "batch_size": batch_size,
@@ -158,7 +160,6 @@ def train_model(rank, world_size, data_path, batch_size=6, use_lora=False, epoch
             "world_size": world_size,
         })
 
-    # Load the dataset
     with open(data_path, "r") as f:
         data = json.load(f)
 
@@ -174,7 +175,6 @@ def train_model(rank, world_size, data_path, batch_size=6, use_lora=False, epoch
         ],
     )
 
-    # Load the model and processor
     model = AutoModelForCausalLM.from_pretrained(
         "andito/Florence-2-large-ft", trust_remote_code=True
     ).to(device)
@@ -203,7 +203,6 @@ def train_model(rank, world_size, data_path, batch_size=6, use_lora=False, epoch
 
     model = DDP(model, device_ids=[rank])
 
-    # Create DataLoaders
     num_workers = 0
     train_loader, val_loader = create_data_loaders(
         train_dataset,
@@ -229,7 +228,6 @@ def train_model(rank, world_size, data_path, batch_size=6, use_lora=False, epoch
     scaler = GradScaler()
 
     for epoch in range(epochs):
-        # Training phase
         model.train()
         train_loss = 0
         for batch in tqdm(
@@ -237,7 +235,6 @@ def train_model(rank, world_size, data_path, batch_size=6, use_lora=False, epoch
         ):
             inputs, answers = batch
 
-            # Prepare the input and target tensors
             input_ids = inputs["input_ids"].to(device)
             pixel_values = inputs["pixel_values"].to(device)
             labels = processor.tokenizer(
@@ -269,19 +266,16 @@ def train_model(rank, world_size, data_path, batch_size=6, use_lora=False, epoch
 
         evaluate_model(rank, world_size, model, val_loader, device, train_loss, processor, global_step, batch_size, max_val_item_count)
 
-        # Log training loss to wandb
         avg_train_loss = train_loss / len(train_loader)
         if rank == 0:
             wandb.log({"epoch": epoch + 1, "epoch_train_loss": avg_train_loss})
 
-        # Save model checkpoint
-        if rank == 0:  # Only the main process saves the checkpoint
+        if rank == 0:
             output_dir = f"./model_checkpoints/{run_name}/epoch_{epoch + 1}"
             os.makedirs(output_dir, exist_ok=True)
             model.module.save_pretrained(output_dir)
             processor.save_pretrained(output_dir)
 
-    # Finish the wandb run
     if rank == 0:
         wandb.finish()
 
