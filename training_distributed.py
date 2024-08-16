@@ -1,5 +1,3 @@
-# torchrun --nproc_per_node=2 train_distributed.py --data-path "/fast_data_2d_2/rohit_work/florence_data/florence_training_data.json" --batch-size 12 --epochs 3 --lr 1e-6 --eval-steps 100000 --run-name "florence_run_one" --max-val-item-count 10000
-
 import argparse
 import os
 from functools import partial
@@ -9,7 +7,6 @@ import json
 import friendlywords as fw
 import torch
 import torch.distributed as dist
-import torch.multiprocessing as mp
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.data import DataLoader, Dataset
 from torch.utils.data.distributed import DistributedSampler
@@ -295,12 +292,10 @@ def main():
     args = parser.parse_args()
 
     world_size = torch.cuda.device_count()
-    mp.spawn(
-        train_model,
-        args=(world_size, args.data_path, args.batch_size, args.use_lora, args.epochs, args.lr, args.eval_steps, args.run_name, args.max_val_item_count),
-        nprocs=world_size,
-        join=True
-    )
+
+    for rank in range(world_size):
+        train_model(rank, world_size, args.data_path, args.batch_size, args.use_lora, args.epochs, args.lr, args.eval_steps, args.run_name, args.max_val_item_count)
+
 
 if __name__ == "__main__":
     main()
